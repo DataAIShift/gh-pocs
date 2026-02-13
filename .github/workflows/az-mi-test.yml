@@ -62,16 +62,16 @@ jobs:
         id: get_ip
         run: |
           # Fetch the public IP of the GitHub-hosted runner
-          IP=$(curl -s https://ifconfig.me)
-          echo "runner_ip=$IP" >> $GITHUB_OUTPUT
-          echo "Runner IP is $IP"
+          set -eu
+          agentIP=$(curl -s https://api.ipify.org/)
+          echo agentIP=$(echo $agentIP) >> $GITHUB_ENV
 
       - name: Whitelist Runner IP
         run: |
           az storage account network-rule add \
             --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
             --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
-            --ip-address ${{ steps.get_ip.outputs.runner_ip }}
+            --ip-address ${{ env.agentIP }}
           
           # Sleep briefly to allow Azure propagation
           sleep 30
@@ -136,12 +136,7 @@ jobs:
           name: tf-plan-artifact  # This name must be exact
           path: ./terraform_runner/tfplan # Ensure this path is correct
           if-no-files-found: error
-      
-      # - name: Download Plan
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: tf-plan-artifact
-      #     path: ./terraform_runner
+
 
   terraform-apply:
     name: Terraform Apply
