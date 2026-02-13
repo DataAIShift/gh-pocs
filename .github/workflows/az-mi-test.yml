@@ -1,0 +1,160 @@
+name: Stage 1 - Deploy GitHub Self-Hosted Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+        default: 'dev'
+
+permissions:
+  id-token: write      # Required for Azure federated identity
+  contents: read       # Required to checkout code
+
+env:
+  AZURE_REGION: northeurope
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load environment variables
+        uses: ./.github/actions/set-env-vars-ps
+        with:
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
+
+      - name: Print env vars
+        shell: pwsh
+        run: |
+          write-host "value of azure subscription is ${{ env.AZURE_SUBSCRIPTION_ID }}"
+          write-host "value of common_var_all_workflows2 is ${{ env.common_var_all_workflows2 }}"
+          write-host "value of storageaccountname is ${{ env.storageaccountname }}"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Set OIDC Token
+        run: |
+          # here we set the oidc token which will be later used in the packer provisoners(powershell, ansible) to authenticate with azure
+          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+          echo "tokens..."
+          echo $ARM_OIDC_TOKEN
+
+      - name: Get Runner IP
+        id: get_ip
+        run: |
+          # Fetch the public IP of the GitHub-hosted runner
+          IP=$(curl -s https://ifconfig.me)
+          echo "runner_ip=$IP" >> $GITHUB_OUTPUT
+          echo "Runner IP is $IP"
+
+      - name: Whitelist Runner IP
+        run: |
+          az storage account network-rule add \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ steps.get_ip.outputs.runner_ip }}
+          
+          # Sleep briefly to allow Azure propagation
+          sleep 30
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Terraform Init with Azure Backend
+        id: terraform-init
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+
+          
+          # Initialize Terraform with Azure RM backend
+          terraform init `
+            -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" `
+            -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" `
+            -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" `
+            -backend-config="key=${{ env.TFSTATEFILE_NAME }}" `
+            -backend-config="use_oidc=true"
+          
+      
+
+      - name: Terraform Validate
+        shell: pwsh
+        run: |
+          cd ./terraform_runner
+          terraform validate
+
+      - name: Terraform Plan
+        id: terraform-plan
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+          
+          # Pass variables using the -var flag
+          terraform plan `
+            -var="resource_group_name=${{ env.RUNNER_RESOURCE_GROUP }}" `
+            -var="location=${{ env.AZURE_REGION }}" `
+            -out=tfplan `
+            -input=false
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-plan-artifact  # This name must be exact
+          path: ./terraform_runner/tfplan # Ensure this path is correct
+          if-no-files-found: error
+      
+      # - name: Download Plan
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: tf-plan-artifact
+      #     path: ./terraform_runner
+
+  approval:
+      name: 'Approval Gate'
+      runs-on: ubuntu-latest
+      needs: [terraform-plan]
+ 
+      # This uses GitHub Environments for manual approval
+      environment: ${{ github.event.inputs.environment }}
+ 
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+ 
+        - name: Awaiting approval
+          run: echo "Approved. Proceeding to Terraform Apply..."
+
+
+      
