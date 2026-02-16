@@ -1,4 +1,4 @@
-name: Stage 1 - Deploy GitHub Self-Hosted Runner
+name: Stage 1 - Deploy GitHub Self-Hosted Runner and Destroy
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ env:
 
 jobs:
   terraform-plan:
-    if: ${{ github.event.inputs.action == 'plan' || github.event.inputs.action == 'apply' }}
+    if: ${{ github.event.inputs.action == 'plan'}}
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
     timeout-minutes: 30
@@ -137,6 +137,14 @@ jobs:
           path: ./terraform_runner/tfplan # Ensure this path is correct
           if-no-files-found: error
 
+      - name: Remove Runner IP
+        if: always() # This ensures the IP is removed even if the apply fails
+        run: |
+          az storage account network-rule remove \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+
 
   terraform-apply:
     name: Terraform Apply
@@ -166,6 +174,24 @@ jobs:
       - name: Set OIDC Token
         run: |
           echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+      
+      - name: Get Runner IP
+        id: get_ip
+        run: |
+          # Fetch the public IP of the GitHub-hosted runner
+          set -eu
+          agentIP=$(curl -s https://api.ipify.org/)
+          echo agentIP=$(echo $agentIP) >> $GITHUB_ENV
+
+      - name: Whitelist Runner IP
+        run: |
+          az storage account network-rule add \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+          
+          # Sleep briefly to allow Azure propagation
+          sleep 30
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -208,6 +234,14 @@ jobs:
         run: |
           cd ./terraform_runner
           terraform apply -input=false tfplan
+
+      - name: Remove Runner IP
+        if: always() # This ensures the IP is removed even if the apply fails
+        run: |
+          az storage account network-rule remove \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
 
 
 
