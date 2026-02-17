@@ -36,7 +36,7 @@ jobs:
       - name: Load environment variables
         uses: ./.github/actions/set-env-vars-ps
         with:
-          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env;./.github/variables/default.env::general
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
 
       - name: Azure Login
         uses: azure/login@v2
