@@ -63,6 +63,6 @@ jobs:
           inlineScript: |
             az deployment group create \
               --name "Storage-Deploy-${{ github.run_id }}" \
-              --resource-group ${{ env.resource_group_name }} \
+              --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
               --template-file ${{ env.STORAGE_TEMPLATE }} \
               --parameters storageAccountName=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} containerName=${{ env.TFSTATEFILE_CONTAINER_NAME }}
