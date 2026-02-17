@@ -1,0 +1,68 @@
+name: Bicep Deployment for Storage Account
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+        default: 'dev'
+
+permissions:
+  id-token: write      # Required for OIDC
+  contents: read       # Required to checkout code
+
+env:
+  AZURE_REGION: northeurope
+  # These should be defined in your .env files, but mapping them here for clarity
+  TEMPLATE_FILE: ./platform_bicep/main.bicep
+  STORAGE_TEMPLATE: ./platform_bicep/storage.bicep
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load environment variables
+        uses: ./.github/actions/set-env-vars-ps
+        with:
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env;./.github/variables/default.env::general
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Resource Group (Subscription Scope)
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az deployment sub create \
+              --name "RG-Deploy-${{ github.run_id }}" \
+              --location ${{ env.AZURE_REGION }} \
+              --template-file ${{ env.TEMPLATE_FILE }} \
+              --parameters rgName=${{ env.resource_group_name }} rgLocation=${{ env.AZURE_REGION }}
+
+      - name: Deploy Storage and Container (Resource Group Scope)
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az deployment group create \
+              --name "Storage-Deploy-${{ github.run_id }}" \
+              --resource-group ${{ env.resource_group_name }} \
+              --template-file ${{ env.STORAGE_TEMPLATE }} \
+              --parameters storageAccountName=${{ env.storageaccountname }} containerName="data-container"
