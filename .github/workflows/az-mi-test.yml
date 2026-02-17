@@ -297,169 +297,169 @@ jobs:
             --ip-address ${{ env.agentIP }}
 
 
-  destroy-runner:
-    name: Destroy Runner
-    if: ${{ github.event.inputs.action == 'destroy' }}
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+  # destroy-runner:
+  #   name: Destroy Runner
+  #   if: ${{ github.event.inputs.action == 'destroy' }}
+  #   runs-on: ubuntu-latest
+  #   environment: ${{ github.event.inputs.environment }}
 
-    steps:
-      # --- LOGIC GUARDRAIL ---
-      - name: Validate Input
-        run: |
-          if [[ -z "${{ github.event.inputs.target_runner_name }}" ]]; then
-            echo "::error title=Invalid Input::You selected DESTROY but did not provide the 'target_runner_name'. Operation cancelled to prevent errors."
-            exit 1
-          fi
+  #   steps:
+  #     # --- LOGIC GUARDRAIL ---
+  #     - name: Validate Input
+  #       run: |
+  #         if [[ -z "${{ github.event.inputs.target_runner_name }}" ]]; then
+  #           echo "::error title=Invalid Input::You selected DESTROY but did not provide the 'target_runner_name'. Operation cancelled to prevent errors."
+  #           exit 1
+  #         fi
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
         
-      - name: Set environment variables
-        run: |
-          # Same Environment Logic - BUT we use the Input Name instead of Random
-          case "${{ github.event.inputs.environment }}" in
-            dev)
-              echo "AZURE_SUBSCRIPTION_ID=831b5aad-42ea-4306-a202-74e9f3f2fb15" >> $GITHUB_ENV
-              echo "AZURE_RESOURCE_GROUP=AZ-AS-SUB-VN-N-SEQ02006-GhRunners-Kiran" >> $GITHUB_ENV
-              echo "AZURE_TENANT_ID=db1e96a8-a3da-442a-930b-235cac24cd5c" >> $GITHUB_ENV
-              echo "AZURE_CLIENT_ID=${{ vars.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-              ;;
-          esac
+  #     - name: Set environment variables
+  #       run: |
+  #         # Same Environment Logic - BUT we use the Input Name instead of Random
+  #         case "${{ github.event.inputs.environment }}" in
+  #           dev)
+  #             echo "AZURE_SUBSCRIPTION_ID=831b5aad-42ea-4306-a202-74e9f3f2fb15" >> $GITHUB_ENV
+  #             echo "AZURE_RESOURCE_GROUP=AZ-AS-SUB-VN-N-SEQ02006-GhRunners-Kiran" >> $GITHUB_ENV
+  #             echo "AZURE_TENANT_ID=db1e96a8-a3da-442a-930b-235cac24cd5c" >> $GITHUB_ENV
+  #             echo "AZURE_CLIENT_ID=${{ vars.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+  #             ;;
+  #         esac
           
-          # CRITICAL: Set VM_NAME to the manual input so we find the right state file
-          echo "VM_NAME=${{ github.event.inputs.target_runner_name }}" >> $GITHUB_ENV
+  #         # CRITICAL: Set VM_NAME to the manual input so we find the right state file
+  #         echo "VM_NAME=${{ github.event.inputs.target_runner_name }}" >> $GITHUB_ENV
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: true
+  #     - name: Azure Login
+  #       uses: azure/login@v2
+  #       with:
+  #         client-id: ${{ env.AZURE_CLIENT_ID }}
+  #         tenant-id: ${{ env.AZURE_TENANT_ID }}
+  #         subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+  #         enable-AzPSSession: true
 
-      - name: Set OIDC Token
-        run: |
-           echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+  #     - name: Set OIDC Token
+  #       run: |
+  #          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
 
-      - name: Get Runner IP (For Whitelisting)
-        id: get_ip
-        run: |
-          agentIP=$(curl -s https://api.ipify.org/)
-          echo "agentIP=$agentIP" >> $GITHUB_ENV
+  #     - name: Get Runner IP (For Whitelisting)
+  #       id: get_ip
+  #       run: |
+  #         agentIP=$(curl -s https://api.ipify.org/)
+  #         echo "agentIP=$agentIP" >> $GITHUB_ENV
 
-      - name: Whitelist Runner IP on Storage
-        run: |
-          az storage account network-rule add \
-            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
-            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
-            --ip-address ${{ env.agentIP }}
-          sleep 30
+  #     - name: Whitelist Runner IP on Storage
+  #       run: |
+  #         az storage account network-rule add \
+  #           --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+  #           --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+  #           --ip-address ${{ env.agentIP }}
+  #         sleep 30
 
-      # ---------------------------------------------------------
-      # STEP: Deregister from GitHub API
-      # ---------------------------------------------------------
-      - name: Deregister Runner from GitHub
-        run: |
-          echo "Finding runner ID for: ${{ env.VM_NAME }}"
+  #     # ---------------------------------------------------------
+  #     # STEP: Deregister from GitHub API
+  #     # ---------------------------------------------------------
+  #     - name: Deregister Runner from GitHub
+  #       run: |
+  #         echo "Finding runner ID for: ${{ env.VM_NAME }}"
           
-          # List runners to find the ID
-          RUNNERS_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/runners)
+  #         # List runners to find the ID
+  #         RUNNERS_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+  #           -H "Accept: application/vnd.github+json" \
+  #           https://api.github.com/repos/${{ github.repository }}/actions/runners)
 
-          # Extract ID using JQ
-          RUNNER_ID=$(echo "$RUNNERS_JSON" | jq -r --arg name "${{ env.VM_NAME }}" '.runners[] | select(.name == $name) | .id')
+  #         # Extract ID using JQ
+  #         RUNNER_ID=$(echo "$RUNNERS_JSON" | jq -r --arg name "${{ env.VM_NAME }}" '.runners[] | select(.name == $name) | .id')
 
-          if [ -z "$RUNNER_ID" ] || [ "$RUNNER_ID" == "null" ]; then
-            echo "⚠️ Runner not found in GitHub list. It might already be removed."
-          else
-            echo "Found Runner ID: $RUNNER_ID. Deleting..."
-            curl -X DELETE \
-              -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runners/$RUNNER_ID"
-            echo "✅ Runner deregistered successfully."
-          fi
+  #         if [ -z "$RUNNER_ID" ] || [ "$RUNNER_ID" == "null" ]; then
+  #           echo "⚠️ Runner not found in GitHub list. It might already be removed."
+  #         else
+  #           echo "Found Runner ID: $RUNNER_ID. Deleting..."
+  #           curl -X DELETE \
+  #             -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+  #             -H "Accept: application/vnd.github+json" \
+  #             "https://api.github.com/repos/${{ github.repository }}/actions/runners/$RUNNER_ID"
+  #           echo "✅ Runner deregistered successfully."
+  #         fi
 
-      # ---------------------------------------------------------
-      # STEP: Terraform Destroy
-      # ---------------------------------------------------------
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.6.0"
+      # # ---------------------------------------------------------
+      # # STEP: Terraform Destroy
+      # # ---------------------------------------------------------
+      # - name: Setup Terraform
+      #   uses: hashicorp/setup-terraform@v3
+      #   with:
+      #     terraform_version: "1.6.0"
 
-      - name: Terraform Init
-        env:
-          ARM_USE_OIDC: true
-          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
-          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
-          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
-        run: |
-          cd stage1-runner-setup-1
-          # Initialize using the EXACT VM_NAME key to find the state file
-          terraform init \
-            -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" \
-            -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" \
-            -backend-config="key=${{ env.VM_NAME }}.tfstate" \
-            -backend-config="use_oidc=true"
+      # - name: Terraform Init
+      #   env:
+      #     ARM_USE_OIDC: true
+      #     ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+      #     ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      #     ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+      #     ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+      #   run: |
+      #     cd stage1-runner-setup-1
+      #     # Initialize using the EXACT VM_NAME key to find the state file
+      #     terraform init \
+      #       -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" \
+      #       -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" \
+      #       -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" \
+      #       -backend-config="key=${{ env.VM_NAME }}.tfstate" \
+      #       -backend-config="use_oidc=true"
 
-      - name: Terraform Destroy
-        env:
-          ARM_USE_OIDC: true
-          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
-          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
-          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
-          # Pass dummy variables for required inputs, actual values come from state
-          TF_VAR_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          TF_VAR_tenant_id: ${{ env.AZURE_TENANT_ID }}
-          TF_VAR_client_id: ${{ env.AZURE_CLIENT_ID }}
-          TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
-          TF_VAR_location: ${{ env.AZURE_REGION }}
-          TF_VAR_vm_name: ${{ env.VM_NAME }}
-          TF_VAR_admin_username: "dummy" # Not needed for destroy
-          TF_VAR_ssh_public_key: "dummy" # Not needed for destroy
-          TF_VAR_vnet_name: "dummy"
-          TF_VAR_subnet_name: "dummy"
-          TF_VAR_vnet_resource_group: "dummy"
-          TF_VAR_ubuntu_os_version: "dummy"
-          TF_VAR_github_runner_token: "dummy"
-          TF_VAR_github_repo_url: "dummy"
-          TF_VAR_runner_name: ${{ env.VM_NAME }}
-          TF_VAR_runner_labels: "dummy"
-        run: |
-          cd stage1-runner-setup-1
-          # We provide -var options or environment variables to satisfy input requirements
-          # even though destroy primarily looks at the state file.
-          terraform destroy -auto-approve \
-            -var="subscription_id=${{ env.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ env.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ env.AZURE_CLIENT_ID }}" \
-            -var="resource_group_name=${{ env.AZURE_RESOURCE_GROUP }}" \
-            -var="location=${{ env.AZURE_REGION }}" \
-            -var="vm_name=${{ env.VM_NAME }}" \
-            -var="admin_username=dummy" \
-            -var="ssh_public_key=dummy" \
-            -var="vnet_name=dummy" \
-            -var="subnet_name=dummy" \
-            -var="vnet_resource_group=dummy" \
-            -var="ubuntu_os_version=dummy" \
-            -var="github_runner_token=dummy" \
-            -var="github_repo_url=dummy" \
-            -var="runner_name=${{ env.VM_NAME }}" \
-            -var="runner_labels=dummy"
+      # - name: Terraform Destroy
+      #   env:
+      #     ARM_USE_OIDC: true
+      #     ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+      #     ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      #     ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+      #     ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+      #     # Pass dummy variables for required inputs, actual values come from state
+      #     TF_VAR_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      #     TF_VAR_tenant_id: ${{ env.AZURE_TENANT_ID }}
+      #     TF_VAR_client_id: ${{ env.AZURE_CLIENT_ID }}
+      #     TF_VAR_resource_group_name: ${{ env.AZURE_RESOURCE_GROUP }}
+      #     TF_VAR_location: ${{ env.AZURE_REGION }}
+      #     TF_VAR_vm_name: ${{ env.VM_NAME }}
+      #     TF_VAR_admin_username: "dummy" # Not needed for destroy
+      #     TF_VAR_ssh_public_key: "dummy" # Not needed for destroy
+      #     TF_VAR_vnet_name: "dummy"
+      #     TF_VAR_subnet_name: "dummy"
+      #     TF_VAR_vnet_resource_group: "dummy"
+      #     TF_VAR_ubuntu_os_version: "dummy"
+      #     TF_VAR_github_runner_token: "dummy"
+      #     TF_VAR_github_repo_url: "dummy"
+      #     TF_VAR_runner_name: ${{ env.VM_NAME }}
+      #     TF_VAR_runner_labels: "dummy"
+      #   run: |
+      #     cd stage1-runner-setup-1
+      #     # We provide -var options or environment variables to satisfy input requirements
+      #     # even though destroy primarily looks at the state file.
+      #     terraform destroy -auto-approve \
+      #       -var="subscription_id=${{ env.AZURE_SUBSCRIPTION_ID }}" \
+      #       -var="tenant_id=${{ env.AZURE_TENANT_ID }}" \
+      #       -var="client_id=${{ env.AZURE_CLIENT_ID }}" \
+      #       -var="resource_group_name=${{ env.AZURE_RESOURCE_GROUP }}" \
+      #       -var="location=${{ env.AZURE_REGION }}" \
+      #       -var="vm_name=${{ env.VM_NAME }}" \
+      #       -var="admin_username=dummy" \
+      #       -var="ssh_public_key=dummy" \
+      #       -var="vnet_name=dummy" \
+      #       -var="subnet_name=dummy" \
+      #       -var="vnet_resource_group=dummy" \
+      #       -var="ubuntu_os_version=dummy" \
+      #       -var="github_runner_token=dummy" \
+      #       -var="github_repo_url=dummy" \
+      #       -var="runner_name=${{ env.VM_NAME }}" \
+      #       -var="runner_labels=dummy"
 
-      - name: Cleanup IP Whitelist
-        if: always()
-        run: |
-          az storage account network-rule remove \
-            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
-            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
-            --ip-address ${{ env.agentIP }}
+      # - name: Cleanup IP Whitelist
+      #   if: always()
+      #   run: |
+      #     az storage account network-rule remove \
+      #       --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+      #       --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+      #       --ip-address ${{ env.agentIP }}
 
 
 
