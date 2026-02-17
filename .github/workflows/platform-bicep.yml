@@ -54,7 +54,7 @@ jobs:
               --name "RG-Deploy-${{ github.run_id }}" \
               --location ${{ env.AZURE_REGION }} \
               --template-file ${{ env.TEMPLATE_FILE }} \
-              --parameters rgName=${{ env.resource_group_name }} rgLocation=${{ env.AZURE_REGION }}
+              --parameters rgName=${{ env.TF_AZURE_RESOURCE_GROUP }} rgLocation=${{ env.AZURE_REGION }}
 
       - name: Deploy Storage and Container (Resource Group Scope)
         uses: azure/cli@v2
@@ -65,4 +65,4 @@ jobs:
               --name "Storage-Deploy-${{ github.run_id }}" \
               --resource-group ${{ env.resource_group_name }} \
               --template-file ${{ env.STORAGE_TEMPLATE }} \
-              --parameters storageAccountName=${{ env.storageaccountname }} containerName="data-container"
+              --parameters storageAccountName=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} containerName=${{ env.TFSTATEFILE_CONTAINER_NAME }}
