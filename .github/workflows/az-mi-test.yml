@@ -376,9 +376,10 @@ jobs:
           cd ./terraform_runner
           
           # Destroy infrastructure. Dummy values are passed for runtime-only secrets.
-          terraform destroy -auto-approve `
-            -target=azurerm_linux_virtual_machine.runner_vm `
-            -var="vm_name=${{ env.VM_NAME  }}"
+          terraform destroy `
+            -auto-approve `
+            -target="azurerm_linux_virtual_machine.runner_vm" `
+            -var="vm_name=${{ github.event.inputs.target_runner_name }}"
           
 
       # -------------------------------------------------------------
