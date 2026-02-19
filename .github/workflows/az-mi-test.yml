@@ -20,10 +20,6 @@ on:
           - deploy
           - destroy
         default: plan
-      target_runner_name:
-        description: 'Type the VM name to confirm deletion'
-        required: false  # Must be false so Plan/Apply can run without it
-        type: string
 
 permissions:
   id-token: write      # Required for Azure federated identity
@@ -83,7 +79,7 @@ jobs:
       - name: Generate SSH Key Pair
         id: ssh-key
         run: |
-          ssh-keygen -t rsa -b 4096 -f github-runner-key -N "" -C "github-runner@${{ env.vm_name }}"
+          ssh-keygen -t rsa -b 4096 -f github-runner-key -N "" -C "github-runner@${{ env.VM_NAME }}"
           SSH_PUBLIC_KEY=$(cat github-runner-key.pub)
           echo "SSH_PUBLIC_KEY<<EOF" >> $GITHUB_OUTPUT
           echo "$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
@@ -310,25 +306,7 @@ jobs:
         with:
           varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
 
-      # -------------------------------------------------------------
-      # 1. SAFETY VALIDATION
-      # -------------------------------------------------------------
-      - name: Validate Deletion Target
-        run: |
-          EXPECTED_NAME="${{ env.VM_NAME }}"
-          PROVIDED_NAME="${{ github.event.inputs.target_runner_name }}"
-          
-          if [ -z "$PROVIDED_NAME" ]; then
-            echo "::error::Deletion aborted. You must provide the exact VM name in 'target_runner_name' to confirm destruction."
-            exit 1
-          fi
-          
-          if [ "$EXPECTED_NAME" != "$PROVIDED_NAME" ]; then
-            echo "::error::Deletion aborted. Provided name '$PROVIDED_NAME' does not match the configured environment VM name '$EXPECTED_NAME'."
-            exit 1
-          fi
-          
-          echo "Validation successful. Proceeding with destruction of $EXPECTED_NAME."
+      
 
       # -------------------------------------------------------------
       # 2. AZURE AUTH & TF STATE ACCESS
