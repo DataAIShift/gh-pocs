@@ -1,4 +1,4 @@
-name: Stage 1 - Deploy or Destroy Runner
+name: Stage 1 - Deploy GitHub Self-Hosted Runner and Destroy
 
 on:
   workflow_dispatch:
@@ -7,34 +7,37 @@ on:
         description: 'Environment'
         required: true
         type: choice
-        options: [dev, uat, prod]
+        options:
+          - dev
+          - uat
+          - prod
         default: 'dev'
       action:
-        description: 'Action'
+        description: 'Terraform Action'
         required: true
         type: choice
-        options: [deploy, destroy]
-        default: 'deploy'
+        options:
+          - deploy
+          - destroy
+        default: plan
       target_runner_name:
-        description: 'Confirmation: Type VM name for Destroy'
-        required: false
+        description: 'Type the VM name to confirm deletion'
+        required: false  # Must be false so Plan/Apply can run without it
         type: string
 
 permissions:
-  id-token: write
-  contents: read
+  id-token: write      # Required for Azure federated identity
+  contents: read       # Required to checkout code
 
 env:
   AZURE_REGION: northeurope
 
 jobs:
-  # --- STAGE 1: PLAN ---
   terraform-plan:
-    name: Terraform Plan
+    if: ${{ github.event.inputs.action == 'deploy'}}
     runs-on: ubuntu-latest
-    outputs:
-      runner_token: ${{ steps.generate-token.outputs.RUNNER_TOKEN }}
-      ssh_key: ${{ steps.ssh-key.outputs.SSH_PUBLIC_KEY }}
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -52,24 +55,65 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
 
-      - name: Get Runner IP
+      - name: Set OIDC Token
         run: |
+          # here we set the oidc token which will be later used in the packer provisoners(powershell, ansible) to authenticate with azure
+          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+          echo "tokens..."
+          echo $ARM_OIDC_TOKEN
+
+      - name: Get Runner IP
+        id: get_ip
+        run: |
+          # Fetch the public IP of the GitHub-hosted runner
+          set -eu
           agentIP=$(curl -s https://api.ipify.org/)
-          echo "agentIP=$agentIP" >> $GITHUB_ENV
-          az storage account network-rule add --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} --ip-address $agentIP
+          echo agentIP=$(echo $agentIP) >> $GITHUB_ENV
+
+      - name: Whitelist Runner IP
+        run: |
+          az storage account network-rule add \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+          
+          # Sleep briefly to allow Azure propagation
           sleep 30
 
       - name: Generate SSH Key Pair
         id: ssh-key
         run: |
-          ssh-keygen -t rsa -b 4096 -f github-runner-key -N "" -C "runner"
-          echo "SSH_PUBLIC_KEY=$(cat github-runner-key.pub)" >> $GITHUB_OUTPUT
+          ssh-keygen -t rsa -b 4096 -f github-runner-key -N "" -C "github-runner@${{ env.vm_name }}"
+          SSH_PUBLIC_KEY=$(cat github-runner-key.pub)
+          echo "SSH_PUBLIC_KEY<<EOF" >> $GITHUB_OUTPUT
+          echo "$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Store private key as artifact for later use
+          mkdir -p ssh-keys
+          mv github-runner-key ssh-keys/
+          mv github-runner-key.pub ssh-keys/
 
       - name: Generate GitHub Runner Token
         id: generate-token
         run: |
-          RESPONSE=$(curl -L -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${{ secrets.GH_PAT }}" -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
-          echo "RUNNER_TOKEN=$(echo $RESPONSE | jq -r '.token')" >> $GITHUB_OUTPUT
+          # Generate a registration token for the runner using PAT
+          # Note: GITHUB_TOKEN cannot be used for runner registration - requires admin permissions
+          RESPONSE=$(curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
+
+          TOKEN=$(echo $RESPONSE | jq -r '.token')
+          echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "Error: Failed to generate runner token"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -77,38 +121,90 @@ jobs:
           terraform_version: 1.5.0
           terraform_wrapper: false
 
-      - name: Terraform Plan
+      - name: Terraform Init with Azure Backend
+        id: terraform-init
         shell: pwsh
         env:
           ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
           ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
         run: |
           cd ./terraform_runner
-          terraform init -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" -backend-config="key=${{ env.TFSTATEFILE_NAME }}" -backend-config="use_oidc=true"
-          
-          $plan_cmd = if ("${{ github.event.inputs.action }}" -eq "destroy") { "terraform plan -destroy" } else { "terraform plan" }
-          
-          Invoke-Expression "$plan_cmd -var='resource_group_name=${{ env.RUNNER_RESOURCE_GROUP }}' -var='location=${{ env.AZURE_REGION }}' -var='vm_name=${{ env.VM_NAME }}' -var='vm_size=Standard_D2s_v3' -var='admin_username=${{ env.ADMIN_USERNAME }}' -var='ssh_public_key=${{ steps.ssh-key.outputs.SSH_PUBLIC_KEY }}' -var='vnet_name=${{ env.AZURE_VNET_NAME }}' -var='subnet_name=${{ env.AZURE_SUBNET_NAME }}' -var='vnet_resource_group=${{ env.AZURE_VNET_RESOURCE_GROUP }}' -var='github_runner_token=${{ steps.generate-token.outputs.RUNNER_TOKEN }}' -var='github_repo_url=https://github.com/${{ github.repository }}' -var='runner_name=${{ env.RUNNER_NAME }}' -var='runner_labels=${{ env.RUNNER_LABELS }}' -out=tfplan"
 
+          
+          # Initialize Terraform with Azure RM backend
+          terraform init `
+            -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" `
+            -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" `
+            -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" `
+            -backend-config="key=${{ env.TFSTATEFILE_NAME }}" `
+            -backend-config="use_oidc=true"
+          
+      
+
+      - name: Terraform Validate
+        shell: pwsh
+        run: |
+          cd ./terraform_runner
+          terraform validate
+
+      - name: Terraform Plan
+        id: terraform-plan
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+          
+          # Pass variables using the -var flag
+          terraform plan `
+            -var="resource_group_name=${{ env.RUNNER_RESOURCE_GROUP }}" `
+            -var="location=${{ env.AZURE_REGION }}" `
+            -var="vm_name=${{ env.VM_NAME }}" `
+            -var="vm_size=Standard_D2s_v3" `
+            -var="admin_username=${{ env.ADMIN_USERNAME }}" `
+            -var="ssh_public_key=${{ steps.ssh-key.outputs.SSH_PUBLIC_KEY }}" `
+            -var="vnet_name=${{ env.AZURE_VNET_NAME }}" `
+            -var="subnet_name=${{ env.AZURE_SUBNET_NAME }}" `
+            -var="vnet_resource_group=${{ env.AZURE_VNET_RESOURCE_GROUP }}" `
+            -var="ubuntu_os_version=22_04-lts-gen2" `
+            -var="github_runner_token=${{ steps.generate-token.outputs.RUNNER_TOKEN }}" `
+            -var="github_repo_url=https://github.com/${{ github.repository }}" `
+            -var="runner_name=${{ env.RUNNER_NAME }}" `
+            -var="runner_labels=${{ env.RUNNER_LABELS }}" `
+            -var='tags={ "Environment": "${{ github.event.inputs.environment }}", "Project": "Citrix-DAAS-Golden-Image", "ManagedBy": "Terraform", "Stage": "Stage1-Runner", "DeployedBy": "GitHub-Actions" }' `
+            -out=tfplan `
+            -input=false
+    
       - name: Upload Plan
         uses: actions/upload-artifact@v4
         with:
-          name: tf-plan-artifact
-          path: ./terraform_runner/tfplan
+          name: tf-plan-artifact  # This name must be exact
+          path: ./terraform_runner/tfplan # Ensure this path is correct
+          if-no-files-found: error
 
-      - name: Cleanup IP
-        if: always()
+      - name: Remove Runner IP
+        if: always() # This ensures the IP is removed even if the apply fails
         run: |
-          az storage account network-rule remove --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} --ip-address ${{ env.agentIP }}
+          az storage account network-rule remove \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
 
-  # --- STAGE 2: APPLY (Requires Manual Approval via Environment) ---
+
   terraform-apply:
-    name: Terraform Apply/Destroy
+    name: Terraform Apply
     needs: terraform-plan
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }} # Trigger Approval
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -124,38 +220,241 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
 
-      - name: Get Runner IP
+      - name: Set OIDC Token
         run: |
+          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+      
+      - name: Get Runner IP
+        id: get_ip
+        run: |
+          # Fetch the public IP of the GitHub-hosted runner
+          set -eu
           agentIP=$(curl -s https://api.ipify.org/)
-          echo "agentIP=$agentIP" >> $GITHUB_ENV
-          az storage account network-rule add --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} --ip-address $agentIP
-          sleep 30
+          echo agentIP=$(echo $agentIP) >> $GITHUB_ENV
 
-      - name: Download Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tf-plan-artifact
-          path: ./terraform_runner
+      - name: Whitelist Runner IP
+        run: |
+          az storage account network-rule add \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+          
+          # Sleep briefly to allow Azure propagation
+          sleep 30
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Download Terraform Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tf-plan-artifact
+          path: ./terraform_runner
+
+      - name: Terraform Init with Azure Backend
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+
+          terraform init `
+            -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" `
+            -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" `
+            -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" `
+            -backend-config="key=${{ env.TFSTATEFILE_NAME }}" `
+            -backend-config="use_oidc=true"
 
       - name: Terraform Apply
         shell: pwsh
         env:
           ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
           ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
         run: |
           cd ./terraform_runner
-          terraform init -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" -backend-config="key=${{ env.TFSTATEFILE_NAME }}" -backend-config="use_oidc=true"
           terraform apply -input=false tfplan
 
-      - name: Cleanup IP
+      - name: Remove Runner IP
+        if: always() # This ensures the IP is removed even if the apply fails
+        run: |
+          az storage account network-rule remove \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+
+  terraform-destroy:
+    name: Terraform Destroy
+    if: ${{ github.event.inputs.action == 'destroy' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load environment variables
+        uses: ./.github/actions/set-env-vars-ps
+        with:
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
+
+      # -------------------------------------------------------------
+      # 1. SAFETY VALIDATION
+      # -------------------------------------------------------------
+      - name: Validate Deletion Target
+        run: |
+          EXPECTED_NAME="${{ env.VM_NAME }}"
+          PROVIDED_NAME="${{ github.event.inputs.target_runner_name }}"
+          
+          if [ -z "$PROVIDED_NAME" ]; then
+            echo "::error::Deletion aborted. You must provide the exact VM name in 'target_runner_name' to confirm destruction."
+            exit 1
+          fi
+          
+          if [ "$EXPECTED_NAME" != "$PROVIDED_NAME" ]; then
+            echo "::error::Deletion aborted. Provided name '$PROVIDED_NAME' does not match the configured environment VM name '$EXPECTED_NAME'."
+            exit 1
+          fi
+          
+          echo "Validation successful. Proceeding with destruction of $EXPECTED_NAME."
+
+      # -------------------------------------------------------------
+      # 2. AZURE AUTH & TF STATE ACCESS
+      # -------------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Set OIDC Token
+        run: |
+          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+
+      - name: Get Runner IP
+        id: get_ip
+        run: |
+          set -eu
+          agentIP=$(curl -s https://api.ipify.org/)
+          echo agentIP=$(echo $agentIP) >> $GITHUB_ENV
+
+      - name: Whitelist Runner IP
+        run: |
+          az storage account network-rule add \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+          sleep 30
+
+      # -------------------------------------------------------------
+      # 3. TERRAFORM DESTROY
+      # -------------------------------------------------------------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Terraform Init with Azure Backend
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+          terraform init `
+            -backend-config="resource_group_name=${{ env.TF_AZURE_RESOURCE_GROUP }}" `
+            -backend-config="storage_account_name=${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }}" `
+            -backend-config="container_name=${{ env.TFSTATEFILE_CONTAINER_NAME }}" `
+            -backend-config="key=${{ env.TFSTATEFILE_NAME }}" `
+            -backend-config="use_oidc=true"
+
+      - name: Terraform Destroy
+        shell: pwsh
+        env:
+          ARM_USE_OIDC: true
+          ARM_OIDC_TOKEN: ${{ env.ARM_OIDC_TOKEN }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+        run: |
+          cd ./terraform_runner
+          
+          # Destroy infrastructure. Dummy values are passed for runtime-only secrets.
+          terraform destroy -auto-approve `
+            -var="resource_group_name=${{ env.RUNNER_RESOURCE_GROUP }}" `
+            -var="location=${{ env.AZURE_REGION }}" `
+            -var="vm_name=${{ env.VM_NAME }}" `
+            -var="vm_size=Standard_D2s_v3" `
+            -var="admin_username=${{ env.ADMIN_USERNAME }}" `
+            -var="ssh_public_key=dummy-key-for-destroy" `
+            -var="vnet_name=${{ env.AZURE_VNET_NAME }}" `
+            -var="subnet_name=${{ env.AZURE_SUBNET_NAME }}" `
+            -var="vnet_resource_group=${{ env.AZURE_VNET_RESOURCE_GROUP }}" `
+            -var="ubuntu_os_version=22_04-lts-gen2" `
+            -var="github_runner_token=dummy-token-for-destroy" `
+            -var="github_repo_url=https://github.com/${{ github.repository }}" `
+            -var="runner_name=${{ env.RUNNER_NAME }}" `
+            -var="runner_labels=${{ env.RUNNER_LABELS }}" `
+            -var='tags={ "Environment": "${{ github.event.inputs.environment }}", "Project": "Citrix-DAAS-Golden-Image", "ManagedBy": "Terraform", "Stage": "Stage1-Runner", "DeployedBy": "GitHub-Actions" }'
+
+      # -------------------------------------------------------------
+      # 4. CLEAN UP GITHUB RUNNER (API)
+      # -------------------------------------------------------------
+      - name: Clean Up Offline GitHub Runners
+        if: success() || failure() # Run this even if TF destroy partially fails
+        run: |
+          echo "Fetching all GitHub runners for repository..."
+          
+          # Fetch all runners and extract IDs for those marked as "offline"
+          OFFLINE_RUNNER_IDS=$(curl -s -X GET \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runners | jq -r '.runners[] | select(.status == "offline") | .id')
+
+          if [ -z "$OFFLINE_RUNNER_IDS" ]; then
+            echo "No offline runners found to clean up."
+          else
+            echo "Found offline runners. Initiating cleanup..."
+            
+            for ID in $OFFLINE_RUNNER_IDS; do
+              echo "Deleting runner ID: $ID"
+              curl -s -X DELETE \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                https://api.github.com/repos/${{ github.repository }}/actions/runners/$ID
+            done
+            
+            echo "Offline runner cleanup complete."
+          fi
+
+      # -------------------------------------------------------------
+      # 5. POST-CLEANUP
+      # -------------------------------------------------------------
+      - name: Remove Runner IP
         if: always()
         run: |
-          az storage account network-rule remove --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} --ip-address ${{ env.agentIP }}
+          az storage account network-rule remove \
+            --resource-group ${{ env.TF_AZURE_RESOURCE_GROUP }} \
+            --account-name ${{ env.TFSTATEFILE_STORAGEACCOUNT_NAME }} \
+            --ip-address ${{ env.agentIP }}
+ 
