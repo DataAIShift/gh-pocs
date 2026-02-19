@@ -418,7 +418,7 @@ jobs:
             -var="vm_name=${{ env.VM_NAME }}" `
             -var="vm_size=Standard_D2s_v3" `
             -var="admin_username=${{ env.ADMIN_USERNAME }}" `
-            -var="ssh_public_key=steps.ssh-key.outputs.SSH_PUBLIC_KEY" `
+            -var="ssh_public_key=${{ steps.ssh-key.outputs.SSH_PUBLIC_KEY }}" `
             -var="vnet_name=${{ env.AZURE_VNET_NAME }}" `
             -var="subnet_name=${{ env.AZURE_SUBNET_NAME }}" `
             -var="vnet_resource_group=${{ env.AZURE_VNET_RESOURCE_GROUP }}" `
