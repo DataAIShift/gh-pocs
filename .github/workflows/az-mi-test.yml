@@ -411,8 +411,10 @@ jobs:
         run: |
           cd ./terraform_runner
           
-          # Destroy infrastructure. Dummy values are passed for runtime-only secrets.
+          # Destroy infrastructure.
           terraform destroy -auto-approve `
+            -target="azurerm_linux_virtual_machine.runner_vm" `
+            -target="azurerm_network_interface.runner_nic" `
             -var="resource_group_name=${{ env.RUNNER_RESOURCE_GROUP }}" `
             -var="location=${{ env.AZURE_REGION }}" `
             -var="vm_name=${{ env.VM_NAME }}" `
