@@ -1,0 +1,67 @@
+name: Storage Deploy 
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+        default: 'dev'
+
+permissions:
+  id-token: write      # Required for Azure federated identity
+  contents: read       # Required to checkout code
+
+env:
+  AZURE_REGION: northeurope
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load environment variables
+        uses: ./.github/actions/set-env-vars-ps
+        with:
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
+
+     
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Set OIDC Token
+        run: |
+          # here we set the oidc token which will be later used in the packer provisoners(powershell, ansible) to authenticate with azure
+          echo "ARM_OIDC_TOKEN=$(curl -H "Accept: application/json; api-version=2.0" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" -H "Content-Type: application/json" -G --data-urlencode "audience=api://AzureADTokenExchange" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')"  >>${GITHUB_ENV}
+          echo "tokens..."
+          echo $ARM_OIDC_TOKEN
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Format
+        run: terraform fmt -check
+
+      - name: Terraform Plan
+        run: terraform plan -input=false
