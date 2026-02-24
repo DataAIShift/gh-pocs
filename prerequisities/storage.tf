@@ -1,5 +1,5 @@
 resource "azurerm_storage_account" "prereqs_sa" {
-  name                     = var.storage_account_name
+  name                     = "prattesdaas007"
   resource_group_name      = azurerm_resource_group.prereqs_rg.name
   location                 = azurerm_resource_group.prereqs_rg.location
   account_tier             = "Standard"
@@ -20,7 +20,7 @@ resource "azurerm_storage_account" "prereqs_sa" {
  
 # Blob Container equivalent (publicAccess: 'None')
 resource "azurerm_storage_container" "container" {
-  name                  = var.container_name
+  name                  = "pratiktestdaas"
   storage_account_id = azurerm_storage_account.prereqs_sa.id
   container_access_type = "private"
 }
