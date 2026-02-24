@@ -22,13 +22,13 @@ variable "location" {
     default = "West Europe"
 }
  
-variable "storage_account_name" {
-  description = "Globally unique name for the Storage Account."
-  type        = string
-}
+# variable "storage_account_name" {
+#   description = "Globally unique name for the Storage Account."
+#   type        = string
+# }
  
-variable "container_name" {
-  description = "Name of the Blob Container."
-  type        = string
-}
+# variable "container_name" {
+#   description = "Name of the Blob Container."
+#   type        = string
+# }
  
