@@ -3,15 +3,15 @@ variable "subscription_id" {
   type        = string
 }
  
-variable "tenant_id" {
-  description = "Azure Tenant ID"
-  type        = string
-}
+# variable "tenant_id" {
+#   description = "Azure Tenant ID"
+#   type        = string
+# }
  
-variable "client_id" {
-  description = "Azure Client ID (Managed Identity) for OIDC authentication"
-  type        = string
-}
+# variable "client_id" {
+#   description = "Azure Client ID (Managed Identity) for OIDC authentication"
+#   type        = string
+# }
  
 variable "project" {
     type = string
