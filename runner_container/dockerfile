@@ -1,0 +1,56 @@
+FROM ubuntu:22.04
+
+# Avoid prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    curl wget git jq unzip apt-transport-https \
+    ca-certificates software-properties-common \
+    gnupg lsb-release sudo iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI
+RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
+
+# --- FIX START: Install Azure CLI, Ansible, GH CLI, and PowerShell ---
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
+    && apt-add-repository -y ppa:ansible/ansible \
+    # Add GitHub CLI Repo
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list \
+    # Add Microsoft Repo for PowerShell
+    && wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb \
+    # Final Update and Install
+    && apt-get update \
+    && apt-get install -y ansible gh powershell \
+    && rm -rf /var/lib/apt/lists/*
+# --- FIX END ---
+
+# Install Terraform & Packer
+RUN wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update && apt-get install -y terraform \
+    && PACKER_VER="1.11.2" \
+    && ARCH=$(dpkg --print-architecture) \
+    && wget https://releases.hashicorp.com/packer/${PACKER_VER}/packer_${PACKER_VER}_linux_${ARCH}.zip \
+    && unzip packer_${PACKER_VER}_linux_${ARCH}.zip -d /usr/local/bin/ && rm *.zip
+
+# GitHub Runner Agent Setup
+WORKDIR /actions-runner
+RUN RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/v//') \
+    && curl -o actions-runner-linux-x64.tar.gz -L "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+    && tar xzf ./actions-runner-linux-x64.tar.gz && rm actions-runner-linux-x64.tar.gz \
+    && ./bin/installdependencies.sh
+
+# Create a non-root user
+RUN useradd -m runner && chown -R runner:runner /actions-runner
+USER runner
+
+# Ensure entrypoint exists or is created
+# COPY --chown=runner:runner entrypoint.sh /actions-runner/entrypoint.sh
+# RUN chmod +x /actions-runner/entrypoint.sh
+
+# ENTRYPOINT ["./entrypoint.sh"]

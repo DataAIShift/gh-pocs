@@ -1,0 +1,54 @@
+name: 'Build and Publish Docker Image to ACR'
+run-name: ${{ github.event.inputs.branch }}-${{ github.event.repository.updated_at }}
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+        default: 'dev'
+      action:
+        description: 'Terraform Action'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - destroy
+        default: plan
+  
+
+jobs:
+  DockerImageBuildandPush:
+    name: Docker Image Build and Push
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+    steps: 
+    - uses: actions/checkout@v2
+
+    - name: 'Configure Environment variables using the default variables file'
+      uses: ./.github/actions/set-env-vars
+      with:
+        varFilePath: ./.github/variables/dev.env
+
+
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        enable-AzPSSession: true
+
+    - name: Build and Publish Image for ACIRunners
+      run: |
+        docker build ${{ github.workspace }}/runner_container/dockerfile -t "containerRegistryPratik1"/"ii-app-api":${{ github.run_id }}
+        docker push "containerRegistryPratik1"/"ii-app-api":${{ github.run_id }}
+    
+
+
