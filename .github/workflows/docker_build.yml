@@ -20,21 +20,25 @@ on:
           - deploy
           - destroy
         default: plan
-  
 
 jobs:
   DockerImageBuildandPush:
     name: Docker Image Build and Push
     runs-on: ubuntu-latest
-    environment:
-      name: dev
+    # Use the input to set the GitHub Environment
+    environment: 
+      name: ${{ github.event.inputs.environment }}
+    
     steps: 
-    - uses: actions/checkout@v2
+    - name: Checkout
+      uses: actions/checkout@v4
 
-    - name: 'Configure Environment variables using the default variables file'
+    - name: 'Configure Environment variables'
       uses: ./.github/actions/set-env-vars
       with:
-        varFilePath: ./.github/variables/dev.env
+        # Dynamically pick the file based on the user's choice (dev/uat/prod)
+        varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
+
 
 
     - name: Azure Login
