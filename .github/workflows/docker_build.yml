@@ -45,10 +45,25 @@ jobs:
         subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
         enable-AzPSSession: true
 
+    - name: Generate GitHub Runner Token
+      id: generate-token
+      run: |
+        RESPONSE=$(curl -L -X POST \
+          -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+          https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
+        TOKEN=$(echo $RESPONSE | jq -r '.token')
+        echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
     - name: Build and Publish Image for ACIRunners
       run: |
-        docker build ${{ github.workspace }}/runner_container/dockerfile -t "containerRegistryPratik1"/"ii-app-api":${{ github.run_id }}
-        docker push "containerRegistryPratik1"/"ii-app-api":${{ github.run_id }}
-    
+        # We run the build FROM the runner_container directory
+        # so that entrypoint.sh is in the local context
+        docker build \
+          --build-arg GITHUB_REPO_URL="https://github.com/${{ github.repository }}" \
+          -t "containerRegistryPratik1/ii-app-api:${{ github.run_id }}" \
+          -f ${{ github.workspace }}/runner_container/dockerfile \
+          ${{ github.workspace }}/runner_container
+
+        docker push "containerRegistryPratik1/ii-app-api:${{ github.run_id }}"
 
 

@@ -1,18 +1,19 @@
 #!/bin/bash
-# Required Env Vars: REPO_URL, RUNNER_TOKEN, RUNNER_NAME, RUNNER_LABELS
-# Parameters
-GITHUB_REPO_URL=$1
-RUNNER_TOKEN=$
-BASE_RUNNER_NAME=$3   # The base name (e.g., "my-runner")
-RUNNER_LABELS=$4
-ADMIN_USERNAME=$5
+set -e
 
-# Registration
-./config.sh --url ${REPO_URL} \
-            --token ${RUNNER_TOKEN} \
-            --name ${RUNNER_NAME:-aci-runner} \
-            --labels ${RUNNER_LABELS:-aci-default} \
-            --unattended --replace --ephemeral
+# These come from the ENV in Dockerfile or ACI Runtime
+echo "Configuring GitHub Runner for: $GITHUB_REPO_URL"
 
-# Start the runner
-./run.sh
+# 1. Configure the runner
+# We use --unattended to avoid prompts and --replace to cleanup old sessions
+./config.sh --url "$GITHUB_REPO_URL" \
+            --token "$RUNNER_TOKEN" \
+            --name "aci-runner-$(hostname)" \
+            --work "_work" \
+            --unattended \
+            --replace
+
+# 2. Start the runner
+# Use 'exec' so that the runner process becomes PID 1 
+# This ensures the container stays running and handles signals correctly
+exec ./run.sh

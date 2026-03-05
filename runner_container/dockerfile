@@ -1,7 +1,12 @@
 FROM ubuntu:22.04
 
-# Avoid prompts
+# Avoid prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
+
+# --- BUILD ARGUMENTS ---
+# Passed during 'docker build' to identify the repo
+ARG GITHUB_REPO_URL
+ENV GITHUB_REPO_URL=${GITHUB_REPO_URL}
 
 # Install base dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,10 +15,10 @@ RUN apt-get update && apt-get install -y \
     gnupg lsb-release sudo iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Docker CLI
+# Install Docker CLI (Allows Docker-in-Docker capabilities if needed)
 RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh
 
-# --- FIX START: Install Azure CLI, Ansible, GH CLI, and PowerShell ---
+# --- TOOLSET INSTALLATION: Azure CLI, Ansible, GH CLI, and PowerShell ---
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     && apt-add-repository -y ppa:ansible/ansible \
     # Add GitHub CLI Repo
@@ -27,9 +32,8 @@ RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     && apt-get update \
     && apt-get install -y ansible gh powershell \
     && rm -rf /var/lib/apt/lists/*
-# --- FIX END ---
 
-# Install Terraform & Packer
+# --- INFRASTRUCTURE TOOLS: Terraform & Packer ---
 RUN wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list \
     && apt-get update && apt-get install -y terraform \
@@ -38,19 +42,24 @@ RUN wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/shar
     && wget https://releases.hashicorp.com/packer/${PACKER_VER}/packer_${PACKER_VER}_linux_${ARCH}.zip \
     && unzip packer_${PACKER_VER}_linux_${ARCH}.zip -d /usr/local/bin/ && rm *.zip
 
-# GitHub Runner Agent Setup
+# --- GITHUB RUNNER AGENT SETUP ---
 WORKDIR /actions-runner
 RUN RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/v//') \
     && curl -o actions-runner-linux-x64.tar.gz -L "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
     && tar xzf ./actions-runner-linux-x64.tar.gz && rm actions-runner-linux-x64.tar.gz \
     && ./bin/installdependencies.sh
 
-# Create a non-root user
-RUN useradd -m runner && chown -R runner:runner /actions-runner
+# --- USER & PERMISSIONS ---
+# Create a non-root user and grant sudo access for workflow tasks
+RUN useradd -m runner && \
+    echo "runner ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    chown -R runner:runner /actions-runner
+
 USER runner
 
-# Ensure entrypoint exists or is created
-# COPY --chown=runner:runner entrypoint.sh /actions-runner/entrypoint.sh
-# RUN chmod +x /actions-runner/entrypoint.sh
+# --- ENTRYPOINT CONFIGURATION ---
+# Assumes entrypoint.sh is in the same folder as the Dockerfile (runner_container/)
+COPY --chown=runner:runner entrypoint.sh /actions-runner/entrypoint.sh
+RUN chmod +x /actions-runner/entrypoint.sh
 
-# ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/actions-runner/entrypoint.sh"]
