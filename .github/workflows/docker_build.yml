@@ -12,14 +12,6 @@ on:
           - uat
           - prod
         default: 'dev'
-      action:
-        description: 'Terraform Action'
-        required: true
-        type: choice
-        options:
-          - deploy
-          - destroy
-        default: plan
 
 jobs:
   DockerImageBuildandPush:
@@ -30,44 +22,43 @@ jobs:
       name: ${{ github.event.inputs.environment }}
     
     steps: 
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: 'Configure Environment variables'
-      uses: ./.github/actions/set-env-vars
-      with:
-        # Dynamically pick the file based on the user's choice (dev/uat/prod)
-        varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
-
+      - name: Load environment variables
+        uses: ./.github/actions/set-env-vars-ps
+        with:
+          varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
 
 
-    - name: Azure Login
-      uses: azure/login@v2
-      with:
-        client-id: ${{ env.AZURE_CLIENT_ID }}
-        tenant-id: ${{ env.AZURE_TENANT_ID }}
-        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-        enable-AzPSSession: true
 
-    - name: Generate GitHub Runner Token
-      id: generate-token
-      run: |
-        RESPONSE=$(curl -L -X POST \
-          -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-          https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
-        TOKEN=$(echo $RESPONSE | jq -r '.token')
-        echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
 
-    - name: Build and Publish Image for ACIRunners
-      run: |
-        # We run the build FROM the runner_container directory
-        # so that entrypoint.sh is in the local context
-        docker build \
-          --build-arg GITHUB_REPO_URL="https://github.com/${{ github.repository }}" \
-          -t "containerRegistryPratik1/ii-app-api:${{ github.run_id }}" \
-          -f ${{ github.workspace }}/runner_container/dockerfile \
-          ${{ github.workspace }}/runner_container
+      - name: Generate GitHub Runner Token
+        id: generate-token
+        run: |
+          RESPONSE=$(curl -L -X POST \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
+          TOKEN=$(echo $RESPONSE | jq -r '.token')
+          echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
 
-        docker push "containerRegistryPratik1/ii-app-api:${{ github.run_id }}"
+      - name: Build and Publish Image for ACIRunners
+        run: |
+          # We run the build FROM the runner_container directory
+          # so that entrypoint.sh is in the local context
+          docker build \
+            --build-arg GITHUB_REPO_URL="https://github.com/${{ github.repository }}" \
+            -t "containerRegistryPratik1/ii-app-api:${{ github.run_id }}" \
+            -f ${{ github.workspace }}/runner_container/dockerfile \
+            ${{ github.workspace }}/runner_container
+
+          docker push "containerRegistryPratik1/ii-app-api:${{ github.run_id }}"
 
 
