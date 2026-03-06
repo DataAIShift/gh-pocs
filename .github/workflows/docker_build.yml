@@ -1,5 +1,6 @@
 name: 'Build and Publish Docker Image to ACR'
 run-name: ${{ github.event.inputs.branch }}-${{ github.event.repository.updated_at }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +22,6 @@ jobs:
   DockerImageBuildandPush:
     name: Docker Image Build and Push
     runs-on: ubuntu-latest
-    # Use the input to set the GitHub Environment
     environment: 
       name: ${{ github.event.inputs.environment }}
     
@@ -34,8 +34,6 @@ jobs:
         with:
           varFilePath: ./.github/variables/${{ github.event.inputs.environment }}.env
 
-
-
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -44,25 +42,19 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
 
-      - name: Generate GitHub Runner Token
-        id: generate-token
+      # NEW STEP: Authenticate Docker with your ACR
+      - name: ACR Login
         run: |
-          RESPONSE=$(curl -L -X POST \
-            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-            https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token)
-          TOKEN=$(echo $RESPONSE | jq -r '.token')
-          echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+          az acr login --name containerRegistryPratik1
 
       - name: Build and Publish Image for ACIRunners
         run: |
-          # We run the build FROM the runner_container directory
-          # so that entrypoint.sh is in the local context
+          REGISTRY="containerregistrypratik1.azurecr.io"
+          IMAGE_TAG="$REGISTRY/ii-app-api:${{ github.run_id }}"
+
           docker build \
-            --build-arg GITHUB_REPO_URL="https://github.com/${{ github.repository }}" \
-            -t "containerRegistryPratik1/ii-app-api:${{ github.run_id }}" \
+            -t "$IMAGE_TAG" \
             -f ${{ github.workspace }}/runner_container/dockerfile \
             ${{ github.workspace }}/runner_container
 
-          docker push "containerRegistryPratik1/ii-app-api:${{ github.run_id }}"
-
-
+          docker push "$IMAGE_TAG"
