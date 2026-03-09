@@ -1,34 +1,49 @@
+# 1. Resource Group
 resource "azurerm_resource_group" "runner_rg" {
   name     = var.resource_group_name
   location = var.location
 }
 
-
-# Data source for existing VNet
+# 2. Networking Data Sources
 data "azurerm_virtual_network" "existing" {
   name                = var.vnet_name
   resource_group_name = var.vnet_resource_group
 }
 
-# Data source for existing Subnet
 data "azurerm_subnet" "existing" {
   name                 = var.subnet_name
   virtual_network_name = var.vnet_name
   resource_group_name  = var.vnet_resource_group
 }
 
-# Use a template to inject the workflow variables into your script
+# 3. Network Interface (The missing piece)
+resource "azurerm_network_interface" "runner_nic" {
+  name                = "${var.vm_name}-nic"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.runner_rg.name
+
+  ip_configuration {
+    name                          = "ipconfig1"
+    subnet_id                     = data.azurerm_subnet.existing.id
+    private_ip_address_allocation = "Dynamic"
+  }
+
+  tags = var.tags
+}
+
+# 4. Script Template Preparation
 data "template_file" "setup_script" {
   template = file("${path.module}/scripts/setup-runner.sh")
   vars = {
-    repo_url     = var.github_repo_url
-    token        = var.github_runner_token
-    runner_name  = var.runner_name
-    labels       = var.runner_labels
-    admin_user   = var.admin_username
+    repo_url    = var.github_repo_url
+    token       = var.github_runner_token
+    runner_name = var.runner_name
+    labels      = var.runner_labels
+    admin_user  = var.admin_username
   }
 }
 
+# 5. Virtual Machine
 resource "azurerm_linux_virtual_machine" "runner_vm" {
   name                  = var.vm_name
   location              = var.location
@@ -39,8 +54,7 @@ resource "azurerm_linux_virtual_machine" "runner_vm" {
   admin_username                  = var.admin_username
   disable_password_authentication = true
 
-  # Injecting the setup script via Cloud-Init
-  # base64encode is mandatory for custom_data in Azure
+  # Cloud-Init Script Injection
   custom_data = base64encode(data.template_file.setup_script.rendered)
 
   admin_ssh_key {
@@ -58,20 +72,18 @@ resource "azurerm_linux_virtual_machine" "runner_vm" {
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
-    sku       = var.ubuntu_os_version # e.g., "22_04-lts-gen2"
+    sku       = var.ubuntu_os_version
     version   = "latest"
   }
 
-  # --- CRITICAL MANAGEMENT BLOCK ---
   lifecycle {
-    # 1. Ignore changes to custom_data so new GitHub tokens don't kill the VM
+    # Prevents reprovisioning when the GitHub token changes in the workflow
     ignore_changes = [
       custom_data,
     ]
 
-    # 2. Strategy for "force_rebuild": Create the new VM before deleting the old one
-    # This prevents downtime during tool upgrades (Blue-Green)
-    create_before_destroy = true
+    # Blue-Green: Create the new VM before deleting the old one
+    create_before_destroy = false
   }
 
   tags = var.tags
