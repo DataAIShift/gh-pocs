@@ -10,7 +10,12 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6.0"
     }
+
+    template = {
+    source  = "hashicorp/template"
+    version = "~> 2.2"
   }
+}
 
   backend "azurerm" {
     # Backend configuration will be passed via CLI
