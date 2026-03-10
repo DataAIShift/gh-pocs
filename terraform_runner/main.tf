@@ -57,10 +57,10 @@ resource "azurerm_linux_virtual_machine" "runner_vm" {
   # Cloud-Init Script Injection
   custom_data = base64encode(data.template_file.setup_script.rendered)
 
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
-  }
+  # admin_ssh_key {
+  #   username   = var.admin_username
+  #   public_key = var.ssh_public_key
+  # }
 
   os_disk {
     name                 = "${var.vm_name}-osdisk"
@@ -88,3 +88,20 @@ resource "azurerm_linux_virtual_machine" "runner_vm" {
 
   tags = var.tags
 }
+resource "azurerm_virtual_machine_extension" "ssh_key_update" {
+  name                 = "ssh_key_update"
+  virtual_machine_id   = azurerm_linux_virtual_machine.runner_vm.id
+  publisher            = "Microsoft.OSTCExtensions"
+  type                 = "VMAccessForLinux"
+  type_handler_version = "1.5"
+
+  # The settings must be a JSON string
+  settings = <<SETTINGS
+    {
+        "username": "${var.admin_username}",
+        "ssh_key": "${var.ssh_public_key}"
+    }
+SETTINGS
+
+}
+
