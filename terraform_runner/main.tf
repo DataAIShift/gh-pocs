@@ -33,7 +33,7 @@ resource "azurerm_network_interface" "runner_nic" {
 
 # 4. Script Template Preparation
 data "template_file" "setup_script" {
-  template = file("${path.module}/scripts/setup-runner.sh")
+  template = file("${path.root}/terraform_runner/scripts/setup-runner.sh")
   vars = {
     repo_url    = var.github_repo_url
     token       = var.github_runner_token
